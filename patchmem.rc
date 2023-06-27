@@ -1,0 +1,25 @@
+#include "winuser.h"
+
+1 VERSIONINFO
+FILEVERSION     0,0,0,1
+PRODUCTVERSION  0,0,0,1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904E4"
+    BEGIN
+      VALUE "CompanyName", "Patchmem"
+      VALUE "FileDescription", "Runtime Code Patching Library"
+      VALUE "FileVersion", "0.0.0.1"
+      VALUE "InternalName", "patchmem"
+      VALUE "LegalCopyright", "patchmem"
+      VALUE "OriginalFilename", "patchmem.dll"
+      VALUE "ProductName", "Patchmem"
+      VALUE "ProductVersion", "0.0.1"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 0x4e4
+  END
+END
