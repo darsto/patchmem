@@ -17,7 +17,7 @@
 
 #define DLLEXPORT
 #include "patchmem.h"
-#include "stackframe.h"
+#include "patchmem_internal.h"
 
 enum patch_mem_type {
 	PATCH_MEM_T_RAW,
@@ -576,10 +576,8 @@ verify_safe_stack_strace(HANDLE thread)
 		p = p->next;
 	}
 
-	struct stack_area stack_area =
-	    stack_area_get_by_thr((void *)thread, (void *)&ctx);
-	struct stack_frame *frame =
-	    stack_frame_get_by_thr((void *)thread, (void *)&ctx, &stack_area);
+	struct stack_area stack_area = _os_stack_area_get_by_thr(thread, &ctx);
+	struct stack_frame *frame = _os_stack_frame_get_by_thr(thread, &ctx, &stack_area);
 	if (frame == NULL) {
 		/* we most likely ended up in a context with -fomit-frame-pointer */
 		return false;
@@ -590,7 +588,7 @@ verify_safe_stack_strace(HANDLE thread)
 
 		ok = GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
 					   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-				       (void *)stack_frame_retaddr(frame), &hm);
+				       (void *)_os_stack_frame_retaddr(frame), &hm);
 		if (!ok) {
 			assert(false);
 		}
@@ -599,7 +597,7 @@ verify_safe_stack_strace(HANDLE thread)
 			return false;
 		}
 
-		frame = stack_frame_next(frame, &stack_area);
+		frame = _os_stack_frame_next(frame, &stack_area);
 	}
 
 	return true;

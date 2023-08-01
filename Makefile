@@ -1,4 +1,4 @@
-OBJECTS = patchmem.o stackframe_x86.o rc.o
+OBJECTS = patchmem.o os_win.o rc.o
 CFLAGS := -m32 -Wall -Werror -O2 -ggdb -MMD -MP -fno-strict-aliasing -masm=intel $(CFLAGS)
 CFLAGS += -fPIC -D_WIN32_WINNT=0x501
 
