@@ -48,7 +48,7 @@ APICALL void patch_mem_rawbytes(uintptr_t addr, const char *buf, unsigned num_by
  * \param asm_fmt_p printf-like string containing ASM instructions
  */
 #define PATCH_MEM(addr_p, replaced_bytes_p, asm_fmt_p, ...)                \
-	static void __attribute__((constructor))                           \
+	static void __attribute__((constructor(110)))                      \
 	    _PATCH_JOIN(init_patch_, __LINE__)(void)                       \
 	{                                                                  \
 		_patch_mem_static_add(addr_p, replaced_bytes_p, asm_fmt_p, \
@@ -65,7 +65,7 @@ APICALL void patch_mem_rawbytes(uintptr_t addr, const char *buf, unsigned num_by
  * \param fn_p the new pointer to jump to
  */
 #define PATCH_JMP32(addr_p, fn_p)                              \
-	static void __attribute__((constructor))               \
+	static void __attribute__((constructor(110)))          \
 	    _PATCH_JOIN(init_patch_, __LINE__)(void)           \
 	{                                                      \
 		_patch_jmp32_static_add(addr_p, (void *)fn_p); \
@@ -80,7 +80,7 @@ APICALL void patch_mem_rawbytes(uintptr_t addr, const char *buf, unsigned num_by
  * \param new_p the new pointer to write
  */
 #define PATCH_PTR(addr_p, org_ptr_p, new_p)                               \
-	static void __attribute__((constructor))                          \
+	static void __attribute__((constructor(110)))                     \
 	    _PATCH_JOIN(init_patch_, __LINE__)(void)                      \
 	{                                                                 \
 		_patch_ptr_static_add(addr_p, (void **)org_ptr_p, new_p); \
@@ -105,7 +105,7 @@ APICALL void patch_mem_rawbytes(uintptr_t addr, const char *buf, unsigned num_by
  * \param asm_fmt_p printf-like string containing ASM instructions
  */
 #define TRAMPOLINE(addr_p, replaced_bytes_p, asm_fmt_p, ...)                \
-	static void __attribute__((constructor))                            \
+	static void __attribute__((constructor(110)))                       \
 	    _PATCH_JOIN(init_patch_, __LINE__)(void)                        \
 	{                                                                   \
 		_trampoline_static_add(addr_p, replaced_bytes_p, asm_fmt_p, \
@@ -143,7 +143,7 @@ APICALL void patch_mem_rawbytes(uintptr_t addr, const char *buf, unsigned num_by
  * \param fn_p trampoline target function to jump to
  */
 #define TRAMPOLINE_FN(fn_ptr_p, replaced_bytes_p, fn_p)                        \
-	static void __attribute__((constructor))                               \
+	static void __attribute__((constructor(110)))                          \
 	    _PATCH_JOIN(init_patch_, __LINE__)(void)                           \
 	{                                                                      \
 		_trampoline_fn_static_add((void **)fn_ptr_p, replaced_bytes_p, \
