@@ -117,6 +117,66 @@ _os_stack_frame_get_by_thr(HANDLE thread, CONTEXT *ctx, struct stack_area *stack
 	return is_valid_stack_frame(frame, stack_area) ? frame : NULL;
 }
 
+#define MEM_PROT_WINSPECIFIC (1UL << 31)
+static unsigned
+win_flags_to_internal(DWORD flags)
+{
+	return flags | MEM_PROT_WINSPECIFIC;
+}
+
+static DWORD
+internal_flags_to_win(unsigned flags)
+{
+	if (flags & MEM_PROT_WINSPECIFIC) {
+		return flags & ~MEM_PROT_WINSPECIFIC;
+	}
+
+	switch (flags) {
+	case MEM_PROT_READ:
+		return PAGE_READONLY;
+	case MEM_PROT_READ | MEM_PROT_WRITE:
+		return PAGE_READWRITE;
+	case MEM_PROT_READ | MEM_PROT_WRITE | MEM_PROT_EXEC:
+		return PAGE_EXECUTE_READWRITE;
+	case MEM_PROT_READ | MEM_PROT_EXEC:
+		return PAGE_EXECUTE_READ;
+	case MEM_PROT_NONE:
+		return PAGE_NOACCESS;
+	}
+
+	assert(false);	// invalid flags combination
+	return PAGE_NOACCESS;
+}
+
+void *
+_os_alloc(int size)
+{
+	if (size == 0) {
+		return NULL;
+	}
+
+	size = (size + 0xFFF) & ~0xFFF;
+	return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+
+void
+_os_free(void *mem, int size)
+{
+	VirtualFree(mem, size, MEM_RELEASE);
+}
+
+int
+_os_protect(void *addr, size_t size, unsigned flags, unsigned *prev_flags)
+{
+	DWORD prevProt;
+	DWORD prot = internal_flags_to_win(flags);
+
+	VirtualProtect(addr, size, prot, &prevProt);
+	if (prev_flags) {
+		*prev_flags = win_flags_to_internal(prevProt);
+	}
+}
+
 int
 _os_static_init(void)
 {

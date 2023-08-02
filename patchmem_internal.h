@@ -91,6 +91,37 @@ struct stack_frame *_os_stack_frame_next(struct stack_frame *frame,
 					 struct stack_area *stack_area);
 
 /**
+ * Flags to mem_protect(). Map 1:1 to linux mprotect() flags.
+ */
+enum _os_mprotect_flags {
+	MEM_PROT_NONE = 0x00,
+	MEM_PROT_READ = 0x01,
+	MEM_PROT_WRITE = 0x02,
+	MEM_PROT_EXEC = 0x04,
+	MEM_PROT_LAST = MEM_PROT_EXEC
+};
+
+/**
+ * Allocate page-aligned memory.
+ * Needs to be freed with _os_free().
+ */
+void *_os_alloc(int size);
+
+/** Free memory from _os_alloc(). */
+void _os_free(void *mem, int size);
+
+/**
+ * Set memory protection bits on provided memory region.
+ * This will affect all memory pages in the given range.
+ * \param ptr start of the memory area
+ * \param size size of the memory area
+ * \param flags bitwise OR of \c _os_mprotect_flags
+ * \param flags pointer to be filled with previous \c _os_mprotect_flags
+ * of this memory area (specifically, it's the flags of memory at \c ptr )
+ */
+int _os_protect(void *addr, size_t size, unsigned flags, unsigned *prev_flags);
+
+/**
  * OS-specific implementation of patch_mem_static_init().
  */
 int _os_static_init(void);

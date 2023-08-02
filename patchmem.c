@@ -5,13 +5,11 @@
 #include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <windows.h>
-
-/* tlhelp32.h is broken, must come after windows.h */
-#include <tlhelp32.h>
+#include <string.h>
 
 #include <keystone/keystone.h>
 
@@ -47,12 +45,12 @@ struct patch_mem_t {
 
 static struct {
 	int init_count;
-	HMODULE usermodule;
 	bool persist;
+	struct patch_mem_lib_handle *libhandle;
 	struct patch_mem_t *patches;
+
 	ks_engine *ks_engine;
 	unsigned char *ks_buf;
-	struct patch_mem_lib_handle *libhandle;
 } g_patchmem;
 
 static int
@@ -73,23 +71,27 @@ assemble_x86(uint32_t addr, const char *in, unsigned char **out)
 }
 
 void
-copy_mem_rawbytes(uintptr_t addr, char *buf, unsigned num_bytes)
+copy_mem_rawbytes(uintptr_t addr, char *buf, size_t num_bytes)
 {
-	DWORD prevProt;
+	void *addr_p = (void *)addr;
+	unsigned prev_flags;
 
-	VirtualProtect((void *)addr, num_bytes, PAGE_EXECUTE_READWRITE, &prevProt);
-	memcpy(buf, (void *)addr, num_bytes);
-	VirtualProtect((void *)addr, num_bytes, prevProt, &prevProt);
+	_os_protect(addr_p, num_bytes, MEM_PROT_READ | MEM_PROT_WRITE | MEM_PROT_EXEC,
+		    &prev_flags);
+	memcpy(buf, addr_p, num_bytes);
+	_os_protect(addr_p, num_bytes, prev_flags, &prev_flags);
 }
 
 void
-patch_mem_rawbytes(uintptr_t addr, const char *buf, unsigned num_bytes)
+patch_mem_rawbytes(uintptr_t addr, const char *buf, size_t num_bytes)
 {
-	DWORD prevProt;
+	void *addr_p = (void *)addr;
+	unsigned prev_flags;
 
-	VirtualProtect((void *)addr, num_bytes, PAGE_EXECUTE_READWRITE, &prevProt);
-	memcpy((void *)addr, buf, num_bytes);
-	VirtualProtect((void *)addr, num_bytes, prevProt, &prevProt);
+	_os_protect(addr_p, num_bytes, MEM_PROT_READ | MEM_PROT_WRITE | MEM_PROT_EXEC,
+		    &prev_flags);
+	memcpy(addr_p, buf, num_bytes);
+	_os_protect(addr_p, num_bytes, prev_flags, &prev_flags);
 }
 
 static void
@@ -152,10 +154,9 @@ assemble_trampoline(uintptr_t addr, size_t replaced_bytes, char *asm_buf,
 	unsigned char *code, *c;
 	unsigned char *tmpcode;
 	int len;
-	DWORD prevprot;
 
 	assert(replaced_bytes >= 5);
-	code = c = VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	code = c = _os_alloc(0x1000);
 	if (code == NULL) {
 		fprintf(stderr, "malloc failed\n");
 		return -ENOMEM;
@@ -170,7 +171,7 @@ assemble_trampoline(uintptr_t addr, size_t replaced_bytes, char *asm_buf,
 		asm_org[0] = 0;
 		len = assemble_x86((uintptr_t)c, asm_buf, &tmpcode);
 		if (len < 0) {
-			VirtualFree(code, 0x1000, MEM_RELEASE);
+			_os_free(code, 0x1000);
 			return len;
 		}
 
@@ -189,7 +190,7 @@ assemble_trampoline(uintptr_t addr, size_t replaced_bytes, char *asm_buf,
 
 	len = assemble_x86((uintptr_t)c, asm_buf, &tmpcode);
 	if (len < 0) {
-		VirtualFree(code, 0x1000, MEM_RELEASE);
+		_os_free(code, 0x1000);
 		return len;
 	}
 
@@ -203,7 +204,7 @@ assemble_trampoline(uintptr_t addr, size_t replaced_bytes, char *asm_buf,
 		   addr + replaced_bytes - ((uintptr_t)c - 1) - 5);
 	c += 4;
 
-	VirtualProtect(code, 0x1000, PAGE_EXECUTE_READ, &prevprot);
+	_os_protect(code, 0x1000, MEM_PROT_READ | MEM_PROT_EXEC, NULL);
 	*out = code;
 	return c - code;
 }
@@ -322,9 +323,9 @@ _patch_jmp32_static_add(uintptr_t addr, void *fn)
 
 	copy_mem_rawbytes(addr, (char *)&op, 1);
 	if (op == 0xe8) {
-		_snprintf(tmp, sizeof(tmp), "call 0x%x", (uintptr_t)fn);
+		snprintf(tmp, sizeof(tmp), "call 0x%x", (uintptr_t)fn);
 	} else {
-		_snprintf(tmp, sizeof(tmp), "jmp 0x%x", (uintptr_t)fn);
+		snprintf(tmp, sizeof(tmp), "jmp 0x%x", (uintptr_t)fn);
 	}
 
 	_patch_mem_static_add(addr, 5, tmp);
@@ -336,7 +337,7 @@ _patch_ptr_static_add(uintptr_t addr, void **org_ptr, void *new)
 	char tmp[32];
 
 	*org_ptr = *(void **)addr; /* mem should be readable */
-	_snprintf(tmp, sizeof(tmp), ".long 0x%x", (uintptr_t) new);
+	snprintf(tmp, sizeof(tmp), ".long 0x%x", (uintptr_t) new);
 
 	_patch_mem_static_add(addr, 4, tmp);
 }
@@ -395,15 +396,9 @@ _process_static_patch_mem(struct patch_mem_t *p)
 		break;
 	}
 	case PATCH_MEM_T_TRAMPOLINE_FN: {
-		char orig_code[32];
 		char *orig;
-		DWORD oldprot;
 
-		assert(p->replaced_bytes <= sizeof(orig_code));
-		memcpy(orig_code, p->u.trampoline_fn.fn, p->replaced_bytes);
-
-		orig = VirtualAlloc(NULL, (p->replaced_bytes + 5 + 0xFFF) & ~0xFFF,
-				    MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		orig = _os_alloc(p->replaced_bytes + 5);
 		if (orig == NULL) {
 			fprintf(stderr, "malloc failed\n");
 			return;
@@ -417,7 +412,8 @@ _process_static_patch_mem(struct patch_mem_t *p)
 			   (uint32_t)(uintptr_t)p->addr + p->replaced_bytes -
 			       (uintptr_t)orig - p->replaced_bytes - 5);
 
-		VirtualProtect(orig, p->replaced_bytes + 5, PAGE_EXECUTE_READ, &oldprot);
+		_os_protect(orig, p->replaced_bytes + 5, MEM_PROT_READ | MEM_PROT_EXEC,
+			    NULL);
 
 		/* make the original fn jump to new code */
 		tmp[0] = 0xe9;
@@ -543,17 +539,17 @@ _unprocess_static_patch_mem_free(struct patch_mem_t *p)
 	case PATCH_MEM_T_TRAMPOLINE: {
 		/* retrieve the pointer that is jmp-ed to */
 		copy_mem_rawbytes(p->addr + 1, tmp, 4); /* skip the 0xe9 byte */
-		uint32_t addr = str_to_u32(tmp) + p->addr + 5;
+		uintptr_t addr = str_to_u32(tmp) + p->addr + 5;
 
-		VirtualFree((void *)(uintptr_t)addr, 0x1000, MEM_RELEASE);
+		_os_free((void *)addr, 0x1000);
 		break;
 	}
 	case PATCH_MEM_T_TRAMPOLINE_FN: {
 		/* retrieve the pointer that is jmp-ed to */
 		copy_mem_rawbytes(p->addr + 1, tmp, 4); /* skip the 0xe9 byte */
-		uint32_t addr = str_to_u32(tmp) + p->addr + 5;
+		uintptr_t addr = str_to_u32(tmp) + p->addr + 5;
 
-		VirtualFree((void *)(uintptr_t)addr, 0x1000, MEM_RELEASE);
+		_os_free((void *)addr, 0x1000);
 		/* restore the original fn pointer */
 		*p->u.trampoline_fn.fn_ptr = (void *)p->addr;
 		break;
