@@ -5,6 +5,7 @@
 #ifndef PATCHMEM_H
 #define PATCHMEM_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -157,6 +158,16 @@ APICALL void patch_mem_rawbytes(uintptr_t addr, const char *buf, size_t num_byte
  * \param libhandle handle of the current DLL/SO. See patchmem_library_handle
  */
 APICALL int patch_mem_static_init(struct patch_mem_lib_handle *libhandle);
+
+/**
+ * Return true if the given addr was patched by patchmem.
+ */
+APICALL bool patch_mem_check_addr_patched(uintptr_t addr);
+
+/**
+ * Get libhandle that patchmem was initialized with.
+ */
+APICALL struct patch_mem_lib_handle *patch_mem_get_libhandle(void);
 
 /**
  * If patchmem was loaded as a separate library, calling this function

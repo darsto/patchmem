@@ -116,3 +116,112 @@ _os_stack_frame_get_by_thr(HANDLE thread, CONTEXT *ctx, struct stack_area *stack
 	struct stack_frame *frame = (void *)ctx->Ebp;
 	return is_valid_stack_frame(frame, stack_area) ? frame : NULL;
 }
+
+static bool
+verify_safe_stack_strace(HANDLE thread)
+{
+	struct patch_mem_t *p;
+	CONTEXT ctx __attribute__((aligned(16))) = { 0 };
+	BOOL ok;
+
+	ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS;
+	ok = GetThreadContext(thread, &ctx);
+	if (!ok) {
+		fprintf(stderr, "GetThreadContext() failed: %lu\n", GetLastError());
+		return false;
+	}
+
+	uintptr_t eip = ctx.Eip;
+	if (patch_mem_check_addr_patched(eip)) {
+		return false;
+	}
+
+	struct stack_area stack_area = _os_stack_area_get_by_thr(thread, &ctx);
+	struct stack_frame *frame = _os_stack_frame_get_by_thr(thread, &ctx, &stack_area);
+	if (frame == NULL) {
+		/* we most likely ended up in a context with -fomit-frame-pointer */
+		return false;
+	}
+
+	while (frame != NULL) {
+		HMODULE hm;
+
+		ok = GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+					   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				       (void *)stack_frame_retaddr(frame), &hm);
+		if (!ok) {
+			assert(false);
+		}
+
+		if ((struct patch_mem_lib_handle *)hm == _patch_mem_get_libhandle()) {
+			return false;
+		}
+
+		frame = stack_frame_next(frame, &stack_area);
+	}
+
+	return true;
+}
+
+void
+_os_safely_suspend_all_threads(void)
+{
+	DWORD thisproc_id = GetCurrentProcessId();
+	DWORD thisthrd_id = GetCurrentThreadId();
+	HANDLE h;
+	THREADENTRY32 te;
+
+	h = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+	if (h == INVALID_HANDLE_VALUE) {
+		return;
+	}
+
+	te.dwSize = sizeof(te);
+	if (!Thread32First(h, &te)) {
+		CloseHandle(h);
+		return;
+	}
+
+	do {
+		if (te.dwSize < FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) +
+				    sizeof(te.th32OwnerProcessID)) {
+			continue;
+		}
+
+		if (te.th32OwnerProcessID != thisproc_id ||
+		    te.th32ThreadID == thisthrd_id) {
+			continue;
+		}
+
+		HANDLE thread = OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
+		if (thread != NULL) {
+			size_t i = 1, max_attempts = 30;
+			while (i < max_attempts) {
+				DWORD rc = SuspendThread(thread);
+				/* the thread may be executing some un-suspendable
+				 * critical section */
+				if (rc != -1) {
+					if (verify_safe_stack_strace(thread)) {
+						break;
+					}
+
+					ResumeThread(thread);
+				}
+
+				Sleep(i);
+				i++;
+			}
+
+			CloseHandle(thread);
+
+			if (i == max_attempts) {
+				assert(false);
+				return;
+			}
+		}
+
+		te.dwSize = sizeof(te);
+	} while (Thread32Next(h, &te));
+
+	CloseHandle(h);
+}

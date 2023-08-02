@@ -90,6 +90,15 @@ uintptr_t _os_stack_frame_retaddr(struct stack_frame *frame);
 struct stack_frame *_os_stack_frame_next(struct stack_frame *frame,
 					 struct stack_area *stack_area);
 
+/**
+ * Iterate through all threads, foreach:
+ *  1. suspend the thread
+ *  2. verify the EIP is not in the patched instruction range
+ *  3. get stack trace, verify none of the functions are in the caller's library
+ *  4. if any of the above failed, try to resume the thread, Sleep(1ms), go back to 1.
+ */
+void _os_safely_suspend_all_threads(void);
+
 #ifdef __cplusplus
 }
 #endif

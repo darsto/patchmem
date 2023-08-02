@@ -444,6 +444,27 @@ _process_static_patch_mem(struct patch_mem_t *p)
 	patch_mem_rawbytes(p->addr, tmp, p->replaced_bytes);
 }
 
+bool
+patch_mem_check_addr_patched(uintptr_t addr)
+{
+	struct patch_mem_t *p = g_patchmem.patches;
+
+	while (p) {
+		if (addr >= p->addr && addr < p->addr + p->replaced_bytes) {
+			return true;
+		}
+		p = p->next;
+	}
+
+	return false;
+}
+
+struct patch_mem_lib_handle *
+patch_mem_get_libhandle(void)
+{
+	return g_patchmem.libhandle;
+}
+
 static int
 init_once(void)
 {
@@ -551,128 +572,6 @@ _unprocess_static_patch_mem_free(struct patch_mem_t *p)
 	free(p);
 }
 
-static bool
-verify_safe_stack_strace(HANDLE thread)
-{
-	struct patch_mem_t *p;
-	CONTEXT ctx __attribute__((aligned(16))) = { 0 };
-	BOOL ok;
-
-	ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS;
-	ok = GetThreadContext(thread, &ctx);
-	if (!ok) {
-		fprintf(stderr, "GetThreadContext() failed: %lu\n", GetLastError());
-		return false;
-	}
-
-	uintptr_t eip = ctx.Eip;
-	p = g_patchmem.patches;
-	while (p) {
-		if (eip >= p->addr && eip < p->addr + p->replaced_bytes) {
-			fprintf(stderr, "eip=0x%x in use by p->addr=0x%x nbytes=%zu\n",
-				eip, p->addr, p->replaced_bytes);
-			return false;
-		}
-		p = p->next;
-	}
-
-	struct stack_area stack_area = _os_stack_area_get_by_thr(thread, &ctx);
-	struct stack_frame *frame = _os_stack_frame_get_by_thr(thread, &ctx, &stack_area);
-	if (frame == NULL) {
-		/* we most likely ended up in a context with -fomit-frame-pointer */
-		return false;
-	}
-
-	while (frame != NULL) {
-		HMODULE hm;
-
-		ok = GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-					   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-				       (void *)_os_stack_frame_retaddr(frame), &hm);
-		if (!ok) {
-			assert(false);
-		}
-
-		if ((struct patch_mem_lib_handle *)hm == g_patchmem.libhandle) {
-			return false;
-		}
-
-		frame = _os_stack_frame_next(frame, &stack_area);
-	}
-
-	return true;
-}
-
-/**
- * Iterate through all threads, foreach:
- *  1. suspend the thread
- *  2. verify the EIP is not in the patched instruction range
- *  3. get stack trace, verify none of the functions are in the caller's library
- *  4. if any of the above failed, try to resume the thread, Sleep(1ms), go back to 1.
- */
-static void
-safely_suspend_all_threads(void)
-{
-	DWORD thisproc_id = GetCurrentProcessId();
-	DWORD thisthrd_id = GetCurrentThreadId();
-	HANDLE h;
-	THREADENTRY32 te;
-
-	h = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-	if (h == INVALID_HANDLE_VALUE) {
-		return;
-	}
-
-	te.dwSize = sizeof(te);
-	if (!Thread32First(h, &te)) {
-		CloseHandle(h);
-		return;
-	}
-
-	do {
-		if (te.dwSize < FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) +
-				    sizeof(te.th32OwnerProcessID)) {
-			continue;
-		}
-
-		if (te.th32OwnerProcessID != thisproc_id ||
-		    te.th32ThreadID == thisthrd_id) {
-			continue;
-		}
-
-		HANDLE thread = OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
-		if (thread != NULL) {
-			size_t i = 1, max_attempts = 30;
-			while (i < max_attempts) {
-				DWORD rc = SuspendThread(thread);
-				/* the thread may be executing some un-suspendable
-				 * critical section */
-				if (rc != -1) {
-					if (verify_safe_stack_strace(thread)) {
-						break;
-					}
-
-					ResumeThread(thread);
-				}
-
-				Sleep(i);
-				i++;
-			}
-
-			CloseHandle(thread);
-
-			if (i == max_attempts) {
-				assert(false);
-				return;
-			}
-		}
-
-		te.dwSize = sizeof(te);
-	} while (Thread32Next(h, &te));
-
-	CloseHandle(h);
-}
-
 void
 patch_mem_static_deinit(struct patch_mem_lib_handle *libhandle)
 {
@@ -682,7 +581,7 @@ patch_mem_static_deinit(struct patch_mem_lib_handle *libhandle)
 	assert(g_patchmem.init_count > 0);
 	g_patchmem.init_count--;
 
-	safely_suspend_all_threads();
+	_os_safely_suspend_all_threads();
 
 	p = g_patchmem.patches;
 	while (p) {
