@@ -7,12 +7,20 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <windows.h>
-#include <winnt.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#if defined(__clang__)
+#define STATIC_ASSERT(cond) _Static_assert(cond, #cond)
+#elif defined(_MSC_VER) && _MSC_VER >= 1600
+#define STATIC_ASSERT(cond) static_assert(cond, #cond)
+#elif __STDC_VERSION__ >= 202311L
+#define STATIC_ASSERT(cond) static_assert(cond)
+#else /* __STDC_VERSION__ < 202311L */
+#define STATIC_ASSERT(cond) _Static_assert(cond, #cond)
+#endif /* __STDC_VERSION__ < 202311L */
 
 /**
  * A singular frame in the function call stack.

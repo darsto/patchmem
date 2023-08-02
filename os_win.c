@@ -45,17 +45,6 @@ _os_stack_area_get_by_thr(HANDLE thread, CONTEXT *context)
 				    (uintptr_t)pTIB->StackBase };
 }
 
-struct stack_frame *__attribute__((naked)) _os_stack_frame_get(void)
-{
-	__asm__("lea eax, [esp - 4]; ret");
-}
-
-bool
-_os_stack_area_contains(struct stack_area *stack_area, uintptr_t addr)
-{
-	return addr > stack_area->end && addr <= stack_area->start;
-}
-
 uintptr_t
 _os_stack_frame_retaddr(struct stack_frame *frame)
 {

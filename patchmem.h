@@ -13,15 +13,25 @@
 extern "C" {
 #endif
 
+#ifdef _WIN32
 #ifdef DLLEXPORT
 #define APICALL __attribute__((dllexport))
-#else
+#else /* DLLEXPORT */
 #define APICALL __attribute__((dllimport))
-#endif
+#endif /* DLLEXPORT */
+#else /* _WIN32 */
+#define APICALL
+#endif /* _WIN32 */
 
 /**
- * Generic typedef for Windows' HMODULE or its Linux equivalent.
- * HMODULE mod = (struct patchmem_lib_handle *)lib_handle;
+ * On Windows:
+ *   Generic typedef for Windows' HMODULE.
+ *   HMODULE mod = (struct patchmem_lib_handle *)lib_handle;
+ *
+ * On Linux:
+ *   Basename of the shared library / executable.
+ *   const char *filename = (struct patchmem_lib_handle *)lib_handle;
+ *   It has to outlive the patchmem library.
  */
 struct patch_mem_lib_handle;
 
