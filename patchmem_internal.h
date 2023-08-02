@@ -5,6 +5,7 @@
 #ifndef PATCHMEM_INTERNAL_H
 #define PATCHMEM_INTERNAL_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <windows.h>
 #include <winnt.h>
@@ -42,6 +43,14 @@ struct stack_area _os_stack_area_get(void);
  * \return stack memory area
  */
 struct stack_area _os_stack_area_get_by_thr(HANDLE thread, CONTEXT *context);
+
+/**
+ * Check if stack area contains given address.
+ *
+ * \param stack_area stack area
+ * \param addr address to check
+ */
+bool _os_stack_area_contains(struct stack_area *stack_area, uintptr_t addr);
 
 /**
  * Get stack frame from the provided Windows thread HANDLE and CONTEXT.
