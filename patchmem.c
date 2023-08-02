@@ -28,7 +28,7 @@ enum patch_mem_type {
 struct patch_mem_t {
 	enum patch_mem_type type;
 	uintptr_t addr;
-	int replaced_bytes;
+	size_t replaced_bytes;
 	union {
 		struct {
 			char *asm_code;
@@ -146,7 +146,7 @@ vasprintf(char **s, const char *fmt, va_list args)
 }
 
 static int
-assemble_trampoline(uintptr_t addr, int replaced_bytes, char *asm_buf,
+assemble_trampoline(uintptr_t addr, size_t replaced_bytes, char *asm_buf,
 		    unsigned char **out)
 {
 	unsigned char *code, *c;
@@ -209,7 +209,7 @@ assemble_trampoline(uintptr_t addr, int replaced_bytes, char *asm_buf,
 }
 
 void
-_trampoline_fn_static_add(void **orig_fn, int replaced_bytes, void *fn)
+_trampoline_fn_static_add(void **orig_fn, size_t replaced_bytes, void *fn)
 {
 	struct patch_mem_t *t;
 
@@ -232,7 +232,7 @@ _trampoline_fn_static_add(void **orig_fn, int replaced_bytes, void *fn)
 }
 
 void
-_trampoline_static_add(uintptr_t addr, int replaced_bytes, const char *asm_fmt, ...)
+_trampoline_static_add(uintptr_t addr, size_t replaced_bytes, const char *asm_fmt, ...)
 {
 	struct patch_mem_t *t;
 	va_list args;
@@ -274,7 +274,7 @@ _trampoline_static_add(uintptr_t addr, int replaced_bytes, const char *asm_fmt, 
 }
 
 void
-_patch_mem_static_add(uintptr_t addr, int replaced_bytes, const char *asm_fmt, ...)
+_patch_mem_static_add(uintptr_t addr, size_t replaced_bytes, const char *asm_fmt, ...)
 {
 	struct patch_mem_t *t;
 	va_list args;
@@ -569,7 +569,7 @@ verify_safe_stack_strace(HANDLE thread)
 	p = g_patchmem.patches;
 	while (p) {
 		if (eip >= p->addr && eip < p->addr + p->replaced_bytes) {
-			fprintf(stderr, "eip=0x%x in use by p->addr=0x%x nbytes=%d\n",
+			fprintf(stderr, "eip=0x%x in use by p->addr=0x%x nbytes=%zu\n",
 				eip, p->addr, p->replaced_bytes);
 			return false;
 		}

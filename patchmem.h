@@ -5,6 +5,7 @@
 #ifndef PATCHMEM_H
 #define PATCHMEM_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -27,13 +28,13 @@ struct patch_mem_lib_handle;
  * Copy `num_bytes` from given address into `buf`.
  * Memory read protection to affected pages will be temporarily turned off.
  */
-APICALL void copy_mem_rawbytes(uintptr_t addr, char *buf, unsigned num_bytes);
+APICALL void copy_mem_rawbytes(uintptr_t addr, char *buf, size_t num_bytes);
 
 /**
  * Write `num_bytes` from `buf` under a given address.
  * Memory write protection to affected pages will be temporarily turned off.
  */
-APICALL void patch_mem_rawbytes(uintptr_t addr, const char *buf, unsigned num_bytes);
+APICALL void patch_mem_rawbytes(uintptr_t addr, const char *buf, size_t num_bytes);
 
 /**
  * Build ASM string with printf-like syntax, them assemble and write it under `addr_p`.
@@ -172,13 +173,13 @@ APICALL void patch_mem_static_persist(void);
 APICALL void patch_mem_static_deinit(struct patch_mem_lib_handle *libhandle);
 
 /* internal functions */
-APICALL void _patch_mem_static_add(uintptr_t addr, int replaced_bytes,
+APICALL void _patch_mem_static_add(uintptr_t addr, size_t replaced_bytes,
 				   const char *asm_fmt, ...);
 APICALL void _patch_jmp32_static_add(uintptr_t addr, void *fn);
 APICALL void _patch_ptr_static_add(uintptr_t addr, void **orig_fn, void *fn);
-APICALL void _trampoline_static_add(uintptr_t addr, int replaced_bytes,
+APICALL void _trampoline_static_add(uintptr_t addr, size_t replaced_bytes,
 				    const char *asm_fmt, ...);
-APICALL void _trampoline_fn_static_add(void **orig_fn, int replaced_bytes, void *fn);
+APICALL void _trampoline_fn_static_add(void **orig_fn, size_t replaced_bytes, void *fn);
 #define _PATCH_JOIN2(a, b) a##b
 #define _PATCH_JOIN(a, b) _PATCH_JOIN2(a, b)
 
