@@ -504,6 +504,11 @@ patch_mem_static_init(struct patch_mem_lib_handle *libhandle)
 		return rc;
 	}
 
+	rc = _os_static_init();
+	if (rc < 0) {
+		return rc;
+	}
+
 	p = g_patchmem.patches;
 	while (p) {
 		_process_static_patch_mem(p);
@@ -516,21 +521,12 @@ patch_mem_static_init(struct patch_mem_lib_handle *libhandle)
 void
 patch_mem_static_persist(void)
 {
-	HMODULE hm;
-	BOOL ok;
-
 	if (g_patchmem.persist) {
 		/* nothing more to do */
 		return;
 	}
 
-	ok = GetModuleHandleEx(
-	    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-	    (void *)patch_mem_static_persist, &hm);
-	if (!ok) {
-		assert(false);
-	}
-
+	_os_static_persist();
 	g_patchmem.persist = true;
 }
 

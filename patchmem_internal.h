@@ -91,6 +91,16 @@ struct stack_frame *_os_stack_frame_next(struct stack_frame *frame,
 					 struct stack_area *stack_area);
 
 /**
+ * OS-specific implementation of patch_mem_static_init().
+ */
+int _os_static_init(void);
+
+/**
+ * OS-specific implementation of patch_mem_static_persist().
+ */
+void _os_static_persist(void);
+
+/**
  * Iterate through all threads, foreach:
  *  1. suspend the thread
  *  2. verify the EIP is not in the patched instruction range

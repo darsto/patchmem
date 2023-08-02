@@ -117,6 +117,26 @@ _os_stack_frame_get_by_thr(HANDLE thread, CONTEXT *ctx, struct stack_area *stack
 	return is_valid_stack_frame(frame, stack_area) ? frame : NULL;
 }
 
+int
+_os_static_init(void)
+{
+	/* nothing to do */
+	return 0;
+}
+
+void
+_os_static_persist(void)
+{
+	HMODULE hm;
+	BOOL ok;
+	ok = GetModuleHandleEx(
+	    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+	    (void *)_os_static_persist, &hm);
+	if (!ok) {
+		assert(false);
+	}
+}
+
 static bool
 verify_safe_stack_strace(HANDLE thread)
 {
