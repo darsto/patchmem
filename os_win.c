@@ -19,7 +19,29 @@ struct stack_frame {
 	void *ret_addr;
 };
 
-struct stack_area
+/**
+ * Stack memory area. Used for call stack validation.
+ */
+struct stack_area {
+	uintptr_t end; /**< lower address */
+	uintptr_t start; /**< higher address */
+};
+
+/** Check if stack area contains given address. */
+static bool
+_os_stack_area_contains(struct stack_area *stack_area, uintptr_t addr)
+{
+	return addr > stack_area->end && addr <= stack_area->start;
+}
+
+/** Get stack frame of the calling function. */
+static struct stack_frame *__attribute__((naked)) _os_stack_frame_get(void)
+{
+	__asm__("lea eax, [esp - 4]; ret");
+}
+
+/** Get stack memory area of the calling function. */
+static struct stack_area
 _os_stack_area_get(void)
 {
 	NT_TIB *pTIB = (NT_TIB *)NtCurrentTeb();
@@ -27,7 +49,9 @@ _os_stack_area_get(void)
 				    (uintptr_t)pTIB->StackBase };
 }
 
-struct stack_area
+/** Get stack memory area for the provided Windows thread HANDLE and
+ *  CONTEXT. */
+static struct stack_area
 _os_stack_area_get_by_thr(HANDLE thread, CONTEXT *context)
 {
 	LDT_ENTRY ldt_entry = { 0 };
@@ -43,12 +67,6 @@ _os_stack_area_get_by_thr(HANDLE thread, CONTEXT *context)
 		     (ldt_entry.HighWord.Bytes.BaseHi << 0x18));
 	return (struct stack_area){ (uintptr_t)pTIB->StackLimit,
 				    (uintptr_t)pTIB->StackBase };
-}
-
-uintptr_t
-_os_stack_frame_retaddr(struct stack_frame *frame)
-{
-	return (uintptr_t)frame->ret_addr;
 }
 
 static bool
@@ -86,14 +104,16 @@ is_valid_stack_frame(struct stack_frame *frame, struct stack_area *stack_area)
 	return true;
 }
 
-struct stack_frame *
+/** Get the next stack frame, deeper in the call stack. */
+static struct stack_frame *
 _os_stack_frame_next(struct stack_frame *frame, struct stack_area *stack_area)
 {
 	struct stack_frame *next = frame->ebp;
 	return is_valid_stack_frame(next, stack_area) ? next : NULL;
 }
 
-struct stack_frame *
+/** Get stack frame from the provided Windows thread HANDLE and CONTEXT. */
+static struct stack_frame *
 _os_stack_frame_get_by_thr(HANDLE thread, CONTEXT *ctx, struct stack_area *stack_area)
 {
 	(void)thread;
@@ -217,7 +237,7 @@ verify_safe_stack_strace(HANDLE thread)
 
 		ok = GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
 					   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-				       (void *)stack_frame_retaddr(frame), &hm);
+				       frame->ret_addr, &hm);
 		if (!ok) {
 			assert(false);
 		}

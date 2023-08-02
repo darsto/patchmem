@@ -1,4 +1,4 @@
-OBJECTS = patchmem.o os_common.o
+OBJECTS = patchmem.o
 CFLAGS := -m32 -Wall -Werror -O0 -ggdb -MMD -MP -fno-strict-aliasing -masm=intel $(CFLAGS)
 CFLAGS += -fPIC
 LDFLAGS := -m32 $(LDFLAGS)
@@ -7,7 +7,7 @@ $(shell mkdir -p build &>/dev/null)
 
 ifeq ($(OS),Windows_NT)
 	LIB_TARGET ?= patchmem.dll
-	OBJECTS += os_win.o stackframe_x86.o rc.o
+	OBJECTS += os_win.o rc.o
 	CFLAGS += -D_WIN32_WINNT=0x501
 else
 	OBJECTS += os_linux.o
