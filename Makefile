@@ -18,16 +18,22 @@ endif
 
 all: build/$(LIB_TARGET)
 
-.PHONY: clean
+.PHONY: clean test tests
 
 clean:
-	rm -f $(OBJECTS:%.o=build/%.o) $(OBJECTS:%.o=build/%.d) build/patchmem.dll build/libpatchmem.so
+	rm -f $(OBJECTS:%.o=build/%.o) $(OBJECTS:%.o=build/%.d) build/patchmem.dll build/libpatchmem.so tests/build/*
 
 install: all
 	@if [ ! -d "${CONFIG_INSTALL_PATH}" ]; then \
 			echo "CONFIG_INSTALL_PATH invalid or not defined"; exit 1; \
 	fi
 	cp build/$(LIB_TARGET) $(CONFIG_INSTALL_PATH:/=)/$(LIB_TARGET)
+
+tests: all
+	@$(MAKE) -C tests test
+
+# just an alias
+test: tests
 
 build/patchmem.dll: $(OBJECTS:%.o=build/%.o)
 	gcc $(LDFLAGS) -o $@ -shared $(filter %.o,$^) -lkeystone -Wl,--subsystem,windows -static-libgcc
