@@ -163,9 +163,68 @@ _os_protect(void *addr_p, size_t size, unsigned flags, unsigned *prev_flags)
 	return mprotect((void *)addr_aligned, size, flags);
 }
 
+#define MAX_THREADS 64
+#define MAX_BACKTRACE_DEPTH 32
+struct thr_ctx {
+	/* thread id the signal was sent to */
+	pid_t tid;
+	/* the number of filled backtrace[] entries */
+	size_t backtrace_depth;
+	/* backtrace */
+	void *backtrace[MAX_BACKTRACE_DEPTH];
+	/* semaphore the thread is waiting on */
+	sem_t resume_sem;
+	/* anything after resume_sem is kept after patchmem deinit */
+};
+
+static struct persistent_ctx {
+	/* Array of per-thread contexts */
+	struct thr_ctx *threads_ctx;
+
+	/* Preallocated, persistent code thunk for synchronizing pthreads */
+	void *thread_suspend_thunk;
+} * g_persistent;
+
+void thread_resume_thunk();
+void thread_resume_thunk_end();
+
 int
 _os_static_init(void)
 {
+	const char *ctxstr = getenv("_PATCHMEM_INTERNAL_CTX");
+	if (ctxstr == NULL) {
+		g_persistent = calloc(1, sizeof(*g_persistent));
+		assert(g_persistent != NULL);
+
+		g_persistent->threads_ctx =
+		    calloc(1, sizeof(*g_persistent->threads_ctx) * MAX_THREADS);
+		assert(g_persistent->threads_ctx != NULL);
+
+		for (size_t i = 0; i < MAX_THREADS; i++) {
+			/* We don't want to ever reinitialize it, so initialize it here,
+			 * now */
+			sem_init(&g_persistent->threads_ctx[i].resume_sem, 0, 0);
+		}
+
+		size_t thread_resume_thunk_size = (size_t)(
+		    (uintptr_t)thread_resume_thunk_end - (uintptr_t)thread_resume_thunk);
+		void *thunk_p = _os_alloc(thread_resume_thunk_size);
+		assert(thunk_p != NULL);
+		memcpy(thunk_p, thread_resume_thunk, thread_resume_thunk_size);
+		_os_protect(thunk_p, thread_resume_thunk_size,
+			    MEM_PROT_READ | MEM_PROT_EXEC, NULL);
+
+		g_persistent->thread_suspend_thunk = thunk_p;
+
+		char tmp[32];
+		snprintf(tmp, sizeof(tmp), "0x%llx", (long long)(uintptr_t)g_persistent);
+		setenv("_PATCHMEM_INTERNAL_CTX", tmp, 1);
+	} else {
+		char *endptr;
+		g_persistent = (void *)(uintptr_t)strtoll(ctxstr, &endptr, 16);
+		assert(g_persistent != NULL);
+	}
+
 	get_mem_regions();
 	return 0;
 }
@@ -186,26 +245,6 @@ sys_gettid(void)
 	return syscall(SYS_gettid);
 }
 
-#define MAX_THREADS 128
-#define MAX_BACKTRACE_DEPTH 32
-static struct thr_ctx {
-	/* thread id the signal was sent to */
-	pid_t tid;
-	/* thread id retrieved inside the signal
-	 * (can be different if the thread was just joined) */
-	pid_t realtid;
-	/* the number of filled backtrace[] entries */
-	size_t backtrace_depth;
-	/* backtrace */
-	void *backtrace[MAX_BACKTRACE_DEPTH];
-	/* semaphore the thread is waiting on */
-	sem_t resume_sem;
-} g_thr_ctx[MAX_THREADS];
-
-static pid_t g_mgmt_tid;
-static pid_t g_suspend_tid;
-static sem_t g_suspend_sem;
-
 static struct thr_ctx *
 thr_ctx_find(pid_t tid)
 {
@@ -213,7 +252,7 @@ thr_ctx_find(pid_t tid)
 	size_t i;
 
 	for (i = 0; i < MAX_THREADS; i++) {
-		ctx = &g_thr_ctx[i];
+		ctx = &g_persistent->threads_ctx[i];
 		if (ctx->tid == 0) {
 			return NULL;
 		}
@@ -226,56 +265,109 @@ thr_ctx_find(pid_t tid)
 	return NULL;
 }
 
+static pid_t g_suspend_tid;
+static sem_t g_suspend_sem;
+
 static void
 thread_suspend_control_handler(int n, siginfo_t *siginfo, void *_sigcontext)
 {
 	ucontext_t *sigcontext = _sigcontext;
-	/* thistid can differ from the tid this signal was sent to if there
-	 * was the thread was joined inbetween - this must not be a problem */
-	pid_t thistid = sys_gettid();
+	/* this thread's tid can differ from the tid this signal was sent to if
+	 * the thread was joined inbetween - this must not be a problem */
 	struct thr_ctx *ctx = thr_ctx_find(g_suspend_tid);
-
 	assert(ctx != NULL);
 
-	/* step 1: setup the the shared memory */
-	ctx->realtid = thistid;
-	sem_init(&ctx->resume_sem, 0, 0);
-
-	void *trace[16];
+	/* Get the backtrace. This includes the signal handler and anything
+	 * below it. */
+	void *trace[MAX_BACKTRACE_DEPTH + 1];
 	int trace_size = backtrace(trace, sizeof(trace) / sizeof(trace[0]));
 
-	/* eip poits to a syscall function - usually a generic syscall wrapper
-	 * anything before that is signal handing that we can easily omit from
-	 * the backtrace. */
-	void *eip = (void *)sigcontext->uc_mcontext.gregs[REG_EIP];
-	size_t final_trace_size = 0;
+	/* we'll skip all stack frames from the signal handling
+	 * (there's more than one!) */
+	void **eip = (void **)&sigcontext->uc_mcontext.gregs[REG_EIP];
 	bool eip_found = false;
-	for (size_t i = 0; i < trace_size; i++) {
+	size_t backtrace_depth = 0;
+
+	for (size_t i = 1; i < trace_size; i++) {
 		if (!eip_found) {
-			if (trace[i] == eip) {
+			if (trace[i] == *eip) {
 				eip_found = true;
+			} else {
+				continue;
 			}
-			continue;
 		}
-		ctx->backtrace[final_trace_size++] = trace[i];
+		ctx->backtrace[backtrace_depth++] = trace[i];
 	}
-	ctx->backtrace_depth = final_trace_size;
+	ctx->backtrace_depth = backtrace_depth;
 
-	/* step 2: wake the main thread */
-	sem_post(&g_suspend_sem);
+	/* Notify the main thread.
+	 * Since this can potentially do a context switch and even stall this
+	 * function execution until the library is unloaded, we have to do the
+	 * notification straight from library-persistent asm code */
+	void **esp = (void **)&sigcontext->uc_mcontext.gregs[REG_ESP];
 
-	/* step 3: sleep until the main threads kicks us.
-	 * This can happen immediately (if the backtrace says it's not safe to
-	 * hot-patch) or later when the library is unloaded and loaded again.
-	 * If the thread has finished inbetween, the tid can change to its parent
-	 * - in that case, if it's the thread that's suspending us, we need not
-	 *   to wait or there will be an unnecessary deadlock */
-	if (thistid != g_mgmt_tid) {
-		while (sem_wait(&ctx->resume_sem) == -1 && errno == EINTR) {
-			continue;
-		}
-	}
+#define PUSH_STACK(val) \
+	*esp -= 4;      \
+	*(void **)(*esp) = (val);
+
+	/* push the original eip to jump back to (ret) */
+	PUSH_STACK(*eip);
+	/* push some context for the asm code to work with */
+	PUSH_STACK(__errno_location);
+	PUSH_STACK(sem_wait);
+	PUSH_STACK(&ctx->resume_sem);
+	PUSH_STACK(sem_post);
+	PUSH_STACK(&g_suspend_sem);
+
+	void *neweip = g_persistent->thread_suspend_thunk;
+	*eip = neweip;
 }
+
+/* Once we send a signal and suspend given threads we need to hold them
+ * suspended - potentially until after we hot-reload the library. This is
+ * not really possible inside a signal handler, so patch the thread to
+ * resume execution at the following chunk of code instead (before jumping
+ * back to whatever it was executing).
+ *
+ * We need to preserve all registers, and also we need to copy this chunk
+ * of code into a buffer that will persist after the library is unloaded,
+ * so the code needs to be position independent.
+ *
+ * The following is expected on the stack:
+ *   [esp + 16] __errno_location;
+ *   [esp + 12] sem_wait;
+ *   [esp +  8] &ctx->resume_sem;
+ *   [esp +  4] sem_post;
+ *   [esp +  0] &g_suspend_sem;
+ */
+__asm__(
+    "thread_resume_thunk:\n"
+    "  pushad\n" /* backup the registers first */
+    "  lea esi, [esp + 32]\n" /* beginning of our stack data in esi */
+    "  push [esi]\n" /* push &g_suspend_sem */
+    "  call [esi + 4]\n" /* sem_post() -> wake the main thread */
+    /* - the patchmem library may be already unloaded at this point - */
+    "  add esp, 4\n"
+    /* sleep until the main threads kicks us.
+     * This can happen immediately (if the backtrace says it's not safe to
+     * hot-patch) or later when the library is unloaded and loaded again. */
+    "  push [esi + 8]\n" /* push &ctx->resume_sem */
+    ".wait:\n"
+    "  call [esi + 12]\n" /* sem_wait() */
+    "  cmp eax, 0\n"
+    "  jz .done\n"
+    "  call [esi + 16]\n" /* __errno_location() */
+    "  mov eax, [eax]\n"
+    "  cmp eax, 4\n" /* EINTR */
+    "  jz .wait\n"
+    ".done:\n"
+    "  add esp, 4\n"
+    "  popad\n"
+    "  add esp, 20\n"
+    "  ret\n"
+    "thread_resume_thunk_end:");
+
+static void thread_safe_resume(struct thr_ctx *ctx);
 
 /** Suspend a thread in a safe-to-hot-unload state */
 static void
@@ -326,8 +418,7 @@ thread_safe_suspend(struct thr_ctx *ctx)
 		    backtrace_symbols(ctx->backtrace, ctx->backtrace_depth);
 		assert(trace_str != NULL);
 
-		/* unlikely, but make sure we're not in a syscall called directly in
-		 * the patched asm */
+		/* unlikely, but make sure we're not directly in the patched asm */
 		if (patch_mem_check_addr_patched((uintptr_t)ctx->backtrace[0])) {
 			is_safe = false;
 		}
@@ -335,38 +426,52 @@ thread_safe_suspend(struct thr_ctx *ctx)
 		for (size_t i = 0; i < ctx->backtrace_depth; i++) {
 			// trace_str[i] == "/lib/i386-linux-gnu/libc.so.6(+0xbf4ad)
 			// [0xf7df04ad]"
-			char *end_sep = strrchr(trace_str[i], '(');
-			assert(end_sep != NULL);
+			const char *end_sep = strrchr(trace_str[i], '(');
+			if (end_sep == NULL) {
+				// trace_str[i] == "[0x57062000]"
+				// - dynamically allocated memory, we can't find its owner
+				// so assume this is not safe
+				is_safe = false;
+				break;
+			}
 
-			char *start_sep = strrchr(trace_str[i], '/');
-			assert(start_sep != NULL);
+			const char *start = strrchr(trace_str[i], '/');
+			if (start == NULL) {
+				// trace_str[i] ==
+				// "linux-gate.so.1(__kernel_rt_sigreturn+0) [0xf7fd0580]"
+				start = trace_str[i];
+			} else {
+				start += 1;
+			}
+			assert(end_sep >= start);
+
 			char filename[64];
-
-			assert(end_sep > start_sep);
-
 			snprintf(filename, sizeof(filename), "%.*s",
-				 (int)((uintptr_t)end_sep - (uintptr_t)start_sep) - 1,
-				 start_sep + 1);
-			// fprintf(stderr, "\tbt[%zu] = %s\n", i, filename);
-
+				 (uintptr_t)end_sep - (uintptr_t)start,
+				 start);
 			if (strcmp(filename, (const char *)patch_mem_get_libhandle()) ==
 			    0) {
 				is_safe = false;
+				break;
 			}
 		}
 
 		free(trace_str);
-
 		if (is_safe) {
 			break;
 		}
 
-		if (ctx->realtid != g_mgmt_tid) {
-			sem_post(&ctx->resume_sem);
-		}
-
+		thread_safe_resume(ctx);
 		usleep(1000 * 5);
 	}
+
+	sem_destroy(&g_suspend_sem);
+}
+
+static void
+thread_safe_resume(struct thr_ctx *ctx)
+{
+	sem_post(&ctx->resume_sem);
 }
 
 void
@@ -376,8 +481,6 @@ _os_safely_suspend_all_threads(void)
 	char dirname[256];
 	pid_t thistid = sys_gettid();
 	pid_t tid;
-
-	g_mgmt_tid = thistid;
 
 	snprintf(dirname, sizeof(dirname), "/proc/self/task");
 	proc_dir = opendir(dirname);
@@ -392,7 +495,6 @@ _os_safely_suspend_all_threads(void)
 		}
 
 		tid = atoll(entry->d_name);
-		fprintf(stderr, "found tid = %d\n", (int)tid);
 		if (tid == thistid) {
 			continue;
 		}
@@ -402,14 +504,30 @@ _os_safely_suspend_all_threads(void)
 			break;
 		}
 
-		struct thr_ctx *ctx = &g_thr_ctx[num_entries];
+		struct thr_ctx *ctx = &g_persistent->threads_ctx[num_entries];
 		assert(ctx->tid == 0);
 		ctx->tid = tid;
-
-		thread_safe_suspend(ctx);
 
 		num_entries++;
 	}
 
 	closedir(proc_dir);
+
+	struct thr_ctx *ctx = g_persistent->threads_ctx;
+	while (ctx->tid > 0) {
+		thread_safe_suspend(ctx);
+		ctx++;
+	}
+}
+
+void
+_os_resume_all_threads(void)
+{
+	struct thr_ctx *ctx = g_persistent->threads_ctx;
+
+	while (ctx->tid > 0) {
+		thread_safe_resume(ctx);
+		memset(ctx, 0, offsetof(struct thr_ctx, resume_sem));
+		ctx++;
+	}
 }

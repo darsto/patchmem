@@ -35,6 +35,14 @@ extern "C" {
  */
 struct patch_mem_lib_handle;
 
+enum patch_mem_deinit_strategy {
+	/* Deinit patchmem library and leave all threads suspended
+	 * (until the library is initialized again - hotpatching) */
+	PATCH_MEM_DEINIT_SUSPEND_ALL,
+	/* Deinit patchmem library and leave all threads running normally */
+	PATCH_MEM_DEINIT_RESUME_ALL,
+};
+
 /**
  * Copy `num_bytes` from given address into `buf`.
  * Memory read protection to affected pages will be temporarily turned off.
@@ -191,7 +199,8 @@ APICALL void patch_mem_static_persist(void);
  *
  * \param libhandle handle of the current DLL/SO. See patchmem_library_handle
  */
-APICALL void patch_mem_static_deinit(struct patch_mem_lib_handle *libhandle);
+APICALL void patch_mem_static_deinit(struct patch_mem_lib_handle *libhandle,
+				     enum patch_mem_deinit_strategy strategy);
 
 /* internal functions */
 APICALL void _patch_mem_static_add(uintptr_t addr, size_t replaced_bytes,

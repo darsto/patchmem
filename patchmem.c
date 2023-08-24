@@ -32,7 +32,7 @@ struct patch_mem_t {
 			char *asm_code;
 		} raw;
 		struct {
-			size_t len;
+			char *asm_code;
 		} trampoline;
 		struct {
 			void **fn_ptr;
@@ -109,7 +109,7 @@ u32_to_str(char *buf, uint32_t u32)
 	buf[3] = u.c[3];
 }
 
-static uint32_t
+uint32_t
 str_to_u32(char *buf)
 {
 	union {
@@ -253,7 +253,7 @@ _trampoline_static_add(uintptr_t addr, size_t replaced_bytes, const char *asm_fm
 	t->replaced_bytes = replaced_bytes;
 
 	va_start(args, asm_fmt);
-	rc = vasprintf(&t->u.raw.asm_code, asm_fmt, args);
+	rc = vasprintf(&t->u.trampoline.asm_code, asm_fmt, args);
 	va_end(args);
 
 	if (rc < 0) {
@@ -262,7 +262,7 @@ _trampoline_static_add(uintptr_t addr, size_t replaced_bytes, const char *asm_fm
 		return;
 	}
 
-	c = t->u.raw.asm_code;
+	c = t->u.trampoline.asm_code;
 	while (*c) {
 		if (*c == '\t') {
 			*c = ' ';
@@ -386,9 +386,9 @@ _process_static_patch_mem(struct patch_mem_t *p)
 		break;
 	}
 	case PATCH_MEM_T_TRAMPOLINE: {
-		p->u.trampoline.len = assemble_trampoline(p->addr, p->replaced_bytes,
-							  p->u.raw.asm_code, &code);
-
+		int rc = assemble_trampoline(p->addr, p->replaced_bytes,
+					     p->u.trampoline.asm_code, &code);
+		assert(rc >= 0);
 		/* jump to new code */
 		tmp[0] = 0xe9;
 		u32_to_str(tmp + 1, (uintptr_t)code - p->addr - 5);
@@ -511,6 +511,8 @@ patch_mem_static_init(struct patch_mem_lib_handle *libhandle)
 		p = p->next;
 	}
 
+	_os_resume_all_threads();
+
 	return g_patchmem.init_count++;
 }
 
@@ -541,15 +543,12 @@ _unprocess_static_patch_mem_free(struct patch_mem_t *p)
 		copy_mem_rawbytes(p->addr + 1, tmp, 4); /* skip the 0xe9 byte */
 		uintptr_t addr = str_to_u32(tmp) + p->addr + 5;
 
+		free(p->u.trampoline.asm_code);
 		_os_free((void *)addr, 0x1000);
 		break;
 	}
 	case PATCH_MEM_T_TRAMPOLINE_FN: {
-		/* retrieve the pointer that is jmp-ed to */
-		copy_mem_rawbytes(p->addr + 1, tmp, 4); /* skip the 0xe9 byte */
-		uintptr_t addr = str_to_u32(tmp) + p->addr + 5;
-
-		_os_free((void *)addr, 0x1000);
+		_os_free(*p->u.trampoline_fn.fn_ptr, 0x1000);
 		/* restore the original fn pointer */
 		*p->u.trampoline_fn.fn_ptr = (void *)p->addr;
 		break;
@@ -565,7 +564,8 @@ _unprocess_static_patch_mem_free(struct patch_mem_t *p)
 }
 
 void
-patch_mem_static_deinit(struct patch_mem_lib_handle *libhandle)
+patch_mem_static_deinit(struct patch_mem_lib_handle *libhandle,
+			enum patch_mem_deinit_strategy strategy)
 {
 	struct patch_mem_t *p_next, *p;
 
@@ -582,6 +582,10 @@ patch_mem_static_deinit(struct patch_mem_lib_handle *libhandle)
 		p = p_next;
 	}
 	g_patchmem.patches = NULL;
+
+	if (strategy == PATCH_MEM_DEINIT_RESUME_ALL) {
+		_os_resume_all_threads();
+	}
 
 	if (g_patchmem.init_count == 0 || g_patchmem.persist) {
 		return;

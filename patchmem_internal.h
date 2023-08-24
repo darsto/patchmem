@@ -72,6 +72,8 @@ void _os_static_persist(void);
  */
 void _os_safely_suspend_all_threads(void);
 
+void _os_resume_all_threads(void);
+
 #ifdef __cplusplus
 }
 #endif
