@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <assert.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -73,6 +74,11 @@ void _os_static_persist(void);
 void _os_safely_suspend_all_threads(void);
 
 void _os_resume_all_threads(void);
+
+/* See the comment inside patchmem.c */
+struct patch_mem_lib_handle *_patch_mem_get_libhandle(void);
+/* See the comment inside patchmem.c */
+bool _patch_mem_check_addr_patched(uintptr_t addr);
 
 #ifdef __cplusplus
 }

@@ -433,6 +433,16 @@ _process_static_patch_mem(struct patch_mem_t *p)
 bool
 patch_mem_check_addr_patched(uintptr_t addr)
 {
+	return _patch_mem_check_addr_patched(addr);
+}
+
+/* We use this function inside os_win.c and Windows MinGW linker complains
+ * it can't find its definition, as the name is mangled by the dllexport
+ * attribute. This is most likely a MinGW bug. Just use another non-exported
+ * function... */
+bool
+_patch_mem_check_addr_patched(uintptr_t addr)
+{
 	struct patch_mem_t *p = g_patchmem.patches;
 
 	while (p) {
@@ -459,6 +469,13 @@ patch_mem_check_addr_patched(uintptr_t addr)
 
 struct patch_mem_lib_handle *
 patch_mem_get_libhandle(void)
+{
+	return _patch_mem_get_libhandle();
+}
+
+/* See the comment on _patch_mem_check_addr_patched() */
+struct patch_mem_lib_handle *
+_patch_mem_get_libhandle(void)
 {
 	return g_patchmem.libhandle;
 }

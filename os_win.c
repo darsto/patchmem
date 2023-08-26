@@ -7,7 +7,9 @@
 #include <stdio.h>
 #include <windows.h>
 #include <winnt.h>
+#include <tlhelp32.h>
 
+#include "patchmem.h"
 #include "patchmem_internal.h"
 
 /**
@@ -29,30 +31,33 @@ struct stack_area {
 
 /** Check if stack area contains given address. */
 static bool
-_os_stack_area_contains(struct stack_area *stack_area, uintptr_t addr)
+stack_area_contains(struct stack_area *stack_area, uintptr_t addr)
 {
 	return addr > stack_area->end && addr <= stack_area->start;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 /** Get stack frame of the calling function. */
-static struct stack_frame *__attribute__((naked)) _os_stack_frame_get(void)
+static struct stack_frame *__attribute__((naked)) stack_frame_get(void)
 {
 	__asm__("lea eax, [esp - 4]; ret");
 }
 
 /** Get stack memory area of the calling function. */
 static struct stack_area
-_os_stack_area_get(void)
+stack_area_get(void)
 {
 	NT_TIB *pTIB = (NT_TIB *)NtCurrentTeb();
 	return (struct stack_area){ (uintptr_t)pTIB->StackLimit,
 				    (uintptr_t)pTIB->StackBase };
 }
+#pragma GCC diagnostic pop
 
 /** Get stack memory area for the provided Windows thread HANDLE and
  *  CONTEXT. */
 static struct stack_area
-_os_stack_area_get_by_thr(HANDLE thread, CONTEXT *context)
+stack_area_get_by_thr(HANDLE thread, CONTEXT *ctx)
 {
 	LDT_ENTRY ldt_entry = { 0 };
 	BOOL ok;
@@ -106,7 +111,7 @@ is_valid_stack_frame(struct stack_frame *frame, struct stack_area *stack_area)
 
 /** Get the next stack frame, deeper in the call stack. */
 static struct stack_frame *
-_os_stack_frame_next(struct stack_frame *frame, struct stack_area *stack_area)
+stack_frame_next(struct stack_frame *frame, struct stack_area *stack_area)
 {
 	struct stack_frame *next = frame->ebp;
 	return is_valid_stack_frame(next, stack_area) ? next : NULL;
@@ -114,7 +119,7 @@ _os_stack_frame_next(struct stack_frame *frame, struct stack_area *stack_area)
 
 /** Get stack frame from the provided Windows thread HANDLE and CONTEXT. */
 static struct stack_frame *
-_os_stack_frame_get_by_thr(HANDLE thread, CONTEXT *ctx, struct stack_area *stack_area)
+stack_frame_get_by_thr(HANDLE thread, CONTEXT *ctx, struct stack_area *stack_area)
 {
 	(void)thread;
 
@@ -179,11 +184,18 @@ _os_protect(void *addr, size_t size, unsigned flags, unsigned *prev_flags)
 {
 	DWORD prevProt;
 	DWORD prot = internal_flags_to_win(flags);
+	BOOL ok;
 
-	VirtualProtect(addr, size, prot, &prevProt);
+	ok = VirtualProtect(addr, size, prot, &prevProt);
+	if (!ok) {
+		return -GetLastError();
+	}
+
 	if (prev_flags) {
 		*prev_flags = win_flags_to_internal(prevProt);
 	}
+
+	return 0;
 }
 
 int
@@ -209,7 +221,6 @@ _os_static_persist(void)
 static bool
 verify_safe_stack_strace(HANDLE thread)
 {
-	struct patch_mem_t *p;
 	CONTEXT ctx __attribute__((aligned(16))) = { 0 };
 	BOOL ok;
 
@@ -221,12 +232,12 @@ verify_safe_stack_strace(HANDLE thread)
 	}
 
 	uintptr_t eip = ctx.Eip;
-	if (patch_mem_check_addr_patched(eip)) {
+	if (_patch_mem_check_addr_patched(eip)) {
 		return false;
 	}
 
-	struct stack_area stack_area = _os_stack_area_get_by_thr(thread, &ctx);
-	struct stack_frame *frame = _os_stack_frame_get_by_thr(thread, &ctx, &stack_area);
+	struct stack_area stack_area = stack_area_get_by_thr(thread, &ctx);
+	struct stack_frame *frame = stack_frame_get_by_thr(thread, &ctx, &stack_area);
 	if (frame == NULL) {
 		/* we most likely ended up in a context with -fomit-frame-pointer */
 		return false;
@@ -307,6 +318,49 @@ _os_safely_suspend_all_threads(void)
 				assert(false);
 				return;
 			}
+		}
+
+		te.dwSize = sizeof(te);
+	} while (Thread32Next(h, &te));
+
+	CloseHandle(h);
+}
+
+void
+_os_resume_all_threads(void)
+{
+	DWORD thisproc_id = GetCurrentProcessId();
+	DWORD thisthrd_id = GetCurrentThreadId();
+	HANDLE h;
+	THREADENTRY32 te;
+
+	h = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+	if (h == INVALID_HANDLE_VALUE) {
+		return;
+	}
+
+	te.dwSize = sizeof(te);
+	if (!Thread32First(h, &te)) {
+		CloseHandle(h);
+		return;
+	}
+
+	do {
+		if (te.dwSize < FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) +
+				    sizeof(te.th32OwnerProcessID)) {
+			continue;
+		}
+
+
+		if (te.th32OwnerProcessID != thisproc_id ||
+		    te.th32ThreadID == thisthrd_id) {
+			continue;
+		}
+
+		HANDLE thread = OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
+		if (thread != NULL) {
+			ResumeThread(thread);
+			CloseHandle(thread);
 		}
 
 		te.dwSize = sizeof(te);
