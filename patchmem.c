@@ -33,6 +33,8 @@ struct patch_mem_t {
 		} raw;
 		struct {
 			char *asm_code;
+			void *thunk;
+			size_t thunk_size;
 		} trampoline;
 		struct {
 			void **fn_ptr;
@@ -107,21 +109,6 @@ u32_to_str(char *buf, uint32_t u32)
 	buf[1] = u.c[1];
 	buf[2] = u.c[2];
 	buf[3] = u.c[3];
-}
-
-uint32_t
-str_to_u32(char *buf)
-{
-	union {
-		char c[4];
-		uint32_t u;
-	} u;
-
-	u.c[0] = buf[0];
-	u.c[1] = buf[1];
-	u.c[2] = buf[2];
-	u.c[3] = buf[3];
-	return u.u;
 }
 
 /* vasprintf is not available in mingw */
@@ -393,6 +380,9 @@ _process_static_patch_mem(struct patch_mem_t *p)
 		tmp[0] = 0xe9;
 		u32_to_str(tmp + 1, (uintptr_t)code - p->addr - 5);
 		len = 5;
+
+		p->u.trampoline.thunk = code;
+		p->u.trampoline.thunk_size = rc;
 		break;
 	}
 	case PATCH_MEM_T_TRAMPOLINE_FN: {
@@ -448,6 +438,18 @@ patch_mem_check_addr_patched(uintptr_t addr)
 	while (p) {
 		if (addr >= p->addr && addr < p->addr + p->replaced_bytes) {
 			return true;
+		}
+		if (p->type == PATCH_MEM_T_TRAMPOLINE) {
+			uintptr_t thunk = (uintptr_t)p->u.trampoline.thunk;
+			size_t size = p->u.trampoline.thunk_size;
+			if (addr >= thunk && addr < thunk + size + 5) {
+				return true;
+			}
+		} else if (p->type == PATCH_MEM_T_TRAMPOLINE_FN) {
+			uintptr_t orgthunk = (uintptr_t)*p->u.trampoline.asm_code;
+			if (addr >= orgthunk && addr < orgthunk + p->replaced_bytes + 5) {
+				return true;
+			}
 		}
 		p = p->next;
 	}
@@ -531,21 +533,17 @@ patch_mem_static_persist(void)
 static void
 _unprocess_static_patch_mem_free(struct patch_mem_t *p)
 {
-	char tmp[512];
-
 	switch (p->type) {
 	case PATCH_MEM_T_RAW: {
 		free(p->u.raw.asm_code);
 		break;
 	}
 	case PATCH_MEM_T_TRAMPOLINE: {
-		/* retrieve the pointer that is jmp-ed to */
-		copy_mem_rawbytes(p->addr + 1, tmp, 4); /* skip the 0xe9 byte */
-		uintptr_t addr = str_to_u32(tmp) + p->addr + 5;
+		void *thunk = p->u.trampoline.thunk;
 
 		free(p->u.trampoline.asm_code);
-		_os_protect((void *)addr, 0x1000, MEM_PROT_READ | MEM_PROT_WRITE, NULL);
-		_os_free((void *)addr, 0x1000);
+		_os_protect(thunk, 0x1000, MEM_PROT_READ | MEM_PROT_WRITE, NULL);
+		_os_free(thunk, 0x1000);
 		break;
 	}
 	case PATCH_MEM_T_TRAMPOLINE_FN: {
