@@ -235,7 +235,7 @@ _os_static_persist(void)
 	Dl_info info;
 	dladdr(&_os_static_persist, &info);
 	const char *so_filename = info.dli_fname;
-	void *ret = dlopen(so_filename, RTLD_NOLOAD | RTLD_GLOBAL | RTLD_NODELETE);
+	void *ret = dlopen(so_filename, RTLD_NOW | RTLD_NOLOAD);
 	assert(ret != NULL);
 }
 
