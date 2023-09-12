@@ -5,9 +5,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <tlhelp32.h>
 #include <windows.h>
 #include <winnt.h>
-#include <tlhelp32.h>
 
 #include "patchmem.h"
 #include "patchmem_internal.h"
@@ -350,7 +350,6 @@ _os_resume_all_threads(void)
 				    sizeof(te.th32OwnerProcessID)) {
 			continue;
 		}
-
 
 		if (te.th32OwnerProcessID != thisproc_id ||
 		    te.th32ThreadID == thisthrd_id) {

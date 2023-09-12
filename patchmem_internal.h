@@ -5,9 +5,9 @@
 #ifndef PATCHMEM_INTERNAL_H
 #define PATCHMEM_INTERNAL_H
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <assert.h>
 
 #ifdef __cplusplus
 extern "C" {

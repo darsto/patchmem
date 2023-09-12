@@ -564,7 +564,8 @@ _unprocess_static_patch_mem_free(struct patch_mem_t *p)
 		break;
 	}
 	case PATCH_MEM_T_TRAMPOLINE_FN: {
-		_os_protect(*p->u.trampoline_fn.fn_ptr, 0x1000, MEM_PROT_READ | MEM_PROT_WRITE, NULL);
+		_os_protect(*p->u.trampoline_fn.fn_ptr, 0x1000,
+			    MEM_PROT_READ | MEM_PROT_WRITE, NULL);
 		_os_free(*p->u.trampoline_fn.fn_ptr, 0x1000);
 		/* restore the original fn pointer */
 		*p->u.trampoline_fn.fn_ptr = (void *)p->addr;

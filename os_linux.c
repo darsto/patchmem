@@ -447,8 +447,7 @@ thread_safe_suspend(struct thr_ctx *ctx)
 
 			char filename[64];
 			snprintf(filename, sizeof(filename), "%.*s",
-				 (uintptr_t)end_sep - (uintptr_t)start,
-				 start);
+				 (uintptr_t)end_sep - (uintptr_t)start, start);
 			if (strcmp(filename, (const char *)patch_mem_get_libhandle()) ==
 			    0) {
 				is_safe = false;
